@@ -373,6 +373,13 @@ def _run_cleanup():
         _cleanup_all_browsers()
     except Exception:
         pass
+    try:
+        from agent.model_catalog import get_catalog
+        catalog = get_catalog()
+        if catalog:
+            catalog.stop_periodic_health_check()
+    except Exception:
+        pass
 
 # ============================================================================
 # ASCII Art & Branding
@@ -967,6 +974,20 @@ class HermesCLI:
             except Exception:
                 pass
         
+        # Load model catalog (optional — silent no-op if file doesn't exist)
+        if not hasattr(self, '_model_catalog'):
+            self._model_catalog = None
+            try:
+                from agent.model_catalog import ModelCatalog, set_catalog
+                catalog = ModelCatalog()
+                if catalog.load() > 0:
+                    catalog.check_health_sync()
+                    catalog.start_periodic_health_check()
+                    self._model_catalog = catalog
+                    set_catalog(catalog)
+            except Exception as e:
+                logger.debug("Model catalog not available: %s", e)
+
         try:
             self.agent = AIAgent(
                 model=self.model,
@@ -983,6 +1004,7 @@ class HermesCLI:
                 platform="cli",
                 session_db=self._session_db,
                 clarify_callback=self._clarify_callback,
+                model_catalog=self._model_catalog,
             )
             return True
         except Exception as e:

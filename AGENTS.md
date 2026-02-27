@@ -21,7 +21,8 @@ hermes-agent/
 │   ├── prompt_caching.py     # Anthropic prompt caching
 │   ├── prompt_builder.py     # System prompt assembly (identity, skills index, context files)
 │   ├── display.py            # KawaiiSpinner, tool preview formatting
-│   └── trajectory.py         # Trajectory saving helpers
+│   ├── trajectory.py         # Trajectory saving helpers
+│   └── model_catalog.py      # Multi-server model catalog + health checks
 ├── hermes_cli/           # CLI implementation
 │   ├── main.py           # Entry point, command dispatcher
 │   ├── banner.py         # Welcome banner, ASCII art, skills summary
@@ -48,6 +49,7 @@ hermes-agent/
 │   ├── terminal_tool.py       # Terminal orchestration (sudo, lifecycle, factory)
 │   ├── todo_tool.py           # Planning & task management
 │   ├── process_registry.py    # Background process management
+│   ├── model_catalog_tool.py  # Model catalog query tool (list/status/find)
 │   └── ...                    # Other tool files
 ├── gateway/              # Messaging platform adapters
 │   ├── platforms/        # Platform-specific adapters (telegram, discord, slack, whatsapp)
@@ -478,6 +480,52 @@ terminal(command="pytest -v tests/", background=true)
 - The process registry checkpoints to `~/.hermes/processes.json` for crash recovery
 
 Files: `tools/process_registry.py` (registry + handler), `tools/terminal_tool.py` (spawn integration)
+
+---
+
+## Model Catalog (Multi-Server Delegation)
+
+The model catalog registers local LLM servers so the orchestration agent can delegate tasks to specific models. Config lives at `~/.hermes/model_catalog.yaml` — when absent, the feature is completely invisible.
+
+### Architecture
+
+```
+agent/model_catalog.py      ← CatalogEntry, ModelCatalog class, singleton
+       ↑
+tools/model_catalog_tool.py ← model_catalog tool (list/status/find)
+       ↑
+model_tools.py              ← discovery
+       ↑
+run_agent.py                ← system prompt injection, catalog_model threading
+       ↑
+cli.py / gateway/run.py     ← startup: load → health check → periodic thread
+```
+
+### Key Design Decisions
+
+- **Invisible by default:** The `model_catalog` tool's `check_fn` returns `False` when no catalog is loaded. It's listed in `_HERMES_CORE_TOOLS` but the `check_fn` gate prevents it from appearing in tool definitions — same pattern as `send_message`.
+- **Singleton pattern:** `get_catalog()` / `set_catalog()` at module level, matching `tools/registry.py`. Set during CLI/gateway init, accessed by tool handlers and `delegate_tool.py`.
+- **Health check thread:** Daemon thread using `threading.Event.wait(timeout=interval)` for clean shutdown. Started only if `load()` returns > 0 entries.
+- **`delegate_task` extension:** Added `catalog_model` parameter (top-level and per-task in batch mode). Resolves to `base_url`/`api_key`/`model` overrides on the child `AIAgent`. Re-checks health once before failing if server was previously `not_reachable`.
+- **System prompt injection:** Compact markdown table inserted between skills and context files layers (in `_build_system_prompt()`), guarded by `has_entries()` and `"model_catalog" in self.valid_tool_names`.
+
+### Adding a Catalog Model
+
+Users create `~/.hermes/model_catalog.yaml` with entries containing `id`, `url`, `model` (required) plus `api_key`, `tags`, `description` (optional). See `model_catalog.yaml.example` in the repo root.
+
+### Files
+
+| File | Role |
+|------|------|
+| `agent/model_catalog.py` | Core: `CatalogEntry`, `ModelCatalog`, health checks, formatting |
+| `tools/model_catalog_tool.py` | Tool: `list`/`status`/`find` actions, `check_fn` gate |
+| `tools/delegate_tool.py` | `catalog_model` param on `delegate_task` |
+| `run_agent.py` | `model_catalog` AIAgent param, prompt injection |
+| `toolsets.py` | `catalog` toolset, `model_catalog` in `_HERMES_CORE_TOOLS` |
+| `model_tools.py` | `tools.model_catalog_tool` in `_discover_tools()` |
+| `tests/tools/test_model_catalog.py` | 39 unit tests |
+
+For a detailed deep dive, see `project_docs/model_catalog.md`.
 
 ---
 

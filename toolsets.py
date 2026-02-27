@@ -60,6 +60,8 @@ _HERMES_CORE_TOOLS = [
     "schedule_cronjob", "list_cronjobs", "remove_cronjob",
     # Cross-platform messaging (gated on gateway running via check_fn)
     "send_message",
+    # Model catalog (gated on catalog being loaded via check_fn)
+    "model_catalog",
 ]
 
 
@@ -126,6 +128,12 @@ TOOLSETS = {
         "includes": []
     },
     
+    "catalog": {
+        "description": "Query local model catalog for available LLM servers",
+        "tools": ["model_catalog"],
+        "includes": [],
+    },
+
     "rl": {
         "description": "RL training tools for running reinforcement learning on Tinker-Atropos",
         "tools": [
