@@ -1,0 +1,56 @@
+# Model Catalog — Register local LLM servers for task delegation
+#
+# Copy this file to ~/.hermes/model_catalog.yaml and edit to match your setup.
+# The orchestrator model is configured in config.yaml, NOT in this file.
+#
+# When this file exists and contains entries, Hermes exposes:
+#   - A model_catalog tool for the agent to query available models
+#   - A catalog_model parameter on delegate_task for routing work
+#   - A summary of available models in the system prompt
+#
+# When this file doesn't exist, the feature is completely invisible.
+
+health_check:
+  interval_seconds: 300        # How often to re-check server health (seconds)
+  timeout_seconds: 5           # HTTP timeout per server
+  method: models               # "models" (GET /v1/models) or "completions" (tiny chat call)
+
+models:
+  # Each entry needs: id, url, model (minimum)
+  # Optional: api_key, tags, description
+
+  - id: local-qwen-coder
+    url: http://localhost:1234/v1
+    # api_key: ""              # Most LMStudio setups have no key
+    model: qwen2.5-coder-32b-instruct
+    tags:
+      size: "32b"
+      family: qwen
+      quantization: q4_k_m
+      capabilities:
+        - code
+        - reasoning
+    description: "Qwen 2.5 Coder 32B — fast local code model"
+
+  - id: local-llama-70b
+    url: http://10.0.0.5:1234/v1
+    model: meta-llama/llama-3.1-70b-instruct
+    tags:
+      size: "70b"
+      family: llama
+      capabilities:
+        - general
+        - reasoning
+        - code
+    description: "Llama 3.1 70B on the homelab server — strong general purpose"
+
+  - id: local-phi-small
+    url: http://localhost:1235/v1
+    model: phi-3-mini-4k-instruct
+    tags:
+      size: "3.8b"
+      family: phi
+      capabilities:
+        - fast
+        - simple-tasks
+    description: "Phi-3 Mini for quick throwaway subtasks"

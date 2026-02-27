@@ -130,6 +130,19 @@ class GatewayRunner:
         # Event hook system
         from gateway.hooks import HookRegistry
         self.hooks = HookRegistry()
+
+        # Model catalog (optional — silent no-op if not configured)
+        self._model_catalog = None
+        try:
+            from agent.model_catalog import ModelCatalog, set_catalog
+            catalog = ModelCatalog()
+            if catalog.load() > 0:
+                catalog.check_health_sync()
+                catalog.start_periodic_health_check()
+                self._model_catalog = catalog
+                set_catalog(catalog)
+        except Exception:
+            pass
     
     @staticmethod
     def _load_prefill_messages() -> List[Dict[str, Any]]:
@@ -335,7 +348,14 @@ class GatewayRunner:
         
         from gateway.status import remove_pid_file
         remove_pid_file()
-        
+
+        # Stop model catalog health checks
+        if self._model_catalog:
+            try:
+                self._model_catalog.stop_periodic_health_check()
+            except Exception:
+                pass
+
         logger.info("Gateway stopped")
     
     async def wait_for_shutdown(self) -> None:
@@ -1444,6 +1464,7 @@ class GatewayRunner:
                 session_id=session_id,
                 tool_progress_callback=progress_callback if tool_progress_enabled else None,
                 platform=platform_key,
+                model_catalog=self._model_catalog,
             )
             
             # Store agent reference for interrupt support

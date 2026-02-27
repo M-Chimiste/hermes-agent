@@ -85,6 +85,7 @@ def _run_single_child(
     model: Optional[str],
     max_iterations: int,
     parent_agent,
+    catalog_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Spawn and run a single child agent. Called from within a thread.
@@ -104,10 +105,49 @@ def _run_single_child(
         if hasattr(parent_agent, '_client_kwargs'):
             parent_api_key = parent_agent._client_kwargs.get("api_key")
 
+        # Resolve child connection params (defaults: inherit from parent)
+        child_base_url = parent_agent.base_url
+        child_api_key = parent_api_key
+        child_model = model or parent_agent.model
+
+        # Override with catalog entry if catalog_model is specified
+        if catalog_model:
+            from agent.model_catalog import get_catalog
+            catalog = get_catalog()
+            if catalog is None or not catalog.has_entries():
+                return {
+                    "task_index": task_index, "status": "error",
+                    "summary": None,
+                    "error": "Model catalog not configured. Create ~/.hermes/model_catalog.yaml",
+                    "api_calls": 0, "duration_seconds": 0,
+                }
+            entry = catalog.get_entry(catalog_model)
+            if entry is None:
+                return {
+                    "task_index": task_index, "status": "error",
+                    "summary": None,
+                    "error": f"Unknown catalog model: {catalog_model}",
+                    "api_calls": 0, "duration_seconds": 0,
+                }
+            if entry.status == "not_reachable":
+                # Re-check once before giving up
+                catalog.check_health_sync(catalog_model)
+                entry = catalog.get_entry(catalog_model)
+            if entry.status != "available":
+                return {
+                    "task_index": task_index, "status": "error",
+                    "summary": None,
+                    "error": f"Catalog model '{catalog_model}' is {entry.status}: {entry.error}",
+                    "api_calls": 0, "duration_seconds": 0,
+                }
+            child_base_url = entry.url
+            child_api_key = entry.api_key or None
+            child_model = entry.model
+
         child = AIAgent(
-            base_url=parent_agent.base_url,
-            api_key=parent_api_key,
-            model=model or parent_agent.model,
+            base_url=child_base_url,
+            api_key=child_api_key,
+            model=child_model,
             max_iterations=max_iterations,
             enabled_toolsets=child_toolsets,
             quiet_mode=True,
@@ -191,6 +231,7 @@ def delegate_task(
     model: Optional[str] = None,
     max_iterations: Optional[int] = None,
     parent_agent=None,
+    catalog_model: Optional[str] = None,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks.
@@ -253,6 +294,7 @@ def delegate_task(
             model=model,
             max_iterations=effective_max_iter,
             parent_agent=parent_agent,
+            catalog_model=t.get("catalog_model") or catalog_model,
         )
         results.append(result)
     else:
@@ -277,6 +319,7 @@ def delegate_task(
                     model=model,
                     max_iterations=effective_max_iter,
                     parent_agent=parent_agent,
+                    catalog_model=t.get("catalog_model") or catalog_model,
                 )
                 futures[future] = i
 
@@ -409,6 +452,10 @@ DELEGATE_TASK_SCHEMA = {
                             "items": {"type": "string"},
                             "description": "Toolsets for this specific task",
                         },
+                        "catalog_model": {
+                            "type": "string",
+                            "description": "Catalog model ID for this specific task",
+                        },
                     },
                     "required": ["goal"],
                 },
@@ -424,6 +471,16 @@ DELEGATE_TASK_SCHEMA = {
                 "description": (
                     "Model override for the subagent(s). Omit to use your "
                     "same model. Use a cheaper/faster model for simple subtasks."
+                ),
+            },
+            "catalog_model": {
+                "type": "string",
+                "description": (
+                    "ID of a model from the local model catalog (e.g. "
+                    "'local-qwen-32b'). When specified, the subagent connects "
+                    "to that catalog server instead of your own endpoint. "
+                    "Overrides the 'model' parameter. "
+                    "Use model_catalog(action='list') to see available models."
                 ),
             },
             "max_iterations": {
@@ -453,6 +510,7 @@ registry.register(
         tasks=args.get("tasks"),
         model=args.get("model"),
         max_iterations=args.get("max_iterations"),
-        parent_agent=kw.get("parent_agent")),
+        parent_agent=kw.get("parent_agent"),
+        catalog_model=args.get("catalog_model")),
     check_fn=check_delegate_requirements,
 )

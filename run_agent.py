@@ -131,6 +131,7 @@ class AIAgent:
         skip_context_files: bool = False,
         skip_memory: bool = False,
         session_db=None,
+        model_catalog=None,
     ):
         """
         Initialize the AI Agent.
@@ -178,6 +179,7 @@ class AIAgent:
         self.ephemeral_system_prompt = ephemeral_system_prompt
         self.platform = platform  # "cli", "telegram", "discord", "whatsapp", etc.
         self.skip_context_files = skip_context_files
+        self._model_catalog = model_catalog
         self.log_prefix_chars = log_prefix_chars
         self.log_prefix = f"{log_prefix} " if log_prefix else ""
         # Store effective base URL for feature detection (prompt caching, reasoning, etc.)
@@ -1106,6 +1108,14 @@ class AIAgent:
         if skills_prompt:
             prompt_parts.append(skills_prompt)
 
+        # Model catalog: inject available local models summary
+        if (self._model_catalog
+                and self._model_catalog.has_entries()
+                and "model_catalog" in self.valid_tool_names):
+            catalog_prompt = self._model_catalog.format_for_system_prompt()
+            if catalog_prompt:
+                prompt_parts.append(catalog_prompt)
+
         if not self.skip_context_files:
             context_files_prompt = build_context_files_prompt()
             if context_files_prompt:
@@ -1509,6 +1519,7 @@ class AIAgent:
                         model=function_args.get("model"),
                         max_iterations=function_args.get("max_iterations"),
                         parent_agent=self,
+                        catalog_model=function_args.get("catalog_model"),
                     )
                     _delegate_result = function_result
                 finally:

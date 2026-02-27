@@ -434,7 +434,7 @@ hermes --toolsets "web,terminal"
 hermes --list-tools
 ```
 
-**Available toolsets:** `web`, `terminal`, `file`, `browser`, `vision`, `image_gen`, `moa`, `skills`, `tts`, `todo`, `memory`, `session_search`, `cronjob`, `code_execution`, `delegation`, `clarify`, and more.
+**Available toolsets:** `web`, `terminal`, `file`, `browser`, `vision`, `image_gen`, `moa`, `skills`, `tts`, `todo`, `memory`, `session_search`, `cronjob`, `code_execution`, `delegation`, `clarify`, `catalog`, and more.
 
 ### 🖥️ Terminal & Process Management
 
@@ -888,6 +888,53 @@ delegation:
   max_iterations: 25                        # Max turns per child (default: 25)
   default_toolsets: ["terminal", "file", "web"]  # Default toolsets
 ```
+
+### 📡 Model Catalog (Multi-Server Delegation)
+
+Register multiple local LLM servers (LMStudio, vLLM, SGLang, etc.) so the orchestration agent can delegate tasks to specific models based on their capabilities. The agent sees available models, their status, and capability tags, then routes work to the best server for each task.
+
+**Setup:** Copy `model_catalog.yaml.example` to `~/.hermes/model_catalog.yaml` and edit:
+
+```yaml
+health_check:
+  interval_seconds: 300
+  timeout_seconds: 5
+
+models:
+  - id: local-qwen-coder
+    url: http://localhost:1234/v1
+    model: qwen2.5-coder-32b-instruct
+    tags:
+      size: "32b"
+      capabilities: [code, reasoning]
+    description: "Qwen 2.5 Coder 32B — fast local code model"
+
+  - id: local-llama-70b
+    url: http://10.0.0.5:1234/v1
+    model: llama-3.1-70b-instruct
+    tags:
+      size: "70b"
+      capabilities: [general, reasoning, code]
+    description: "Llama 3.1 70B — strong general purpose"
+```
+
+**Usage:** The agent uses `model_catalog` to discover models, then `delegate_task` with `catalog_model` to route work:
+
+```
+delegate_task(goal="Review this code for bugs", catalog_model="local-qwen-coder")
+
+# Or route different tasks to different models in parallel:
+delegate_task(tasks=[
+    {"goal": "Review this Python code", "catalog_model": "local-qwen-coder"},
+    {"goal": "Summarize this research paper", "catalog_model": "local-llama-70b"},
+])
+```
+
+**Key properties:**
+- Health-checked on startup and periodically (configurable interval)
+- Completely invisible when `model_catalog.yaml` doesn't exist — no tools, no prompt changes
+- Tags enable capability-based discovery (e.g. find all models with `code` capability)
+- Falls back to orchestrator self-delegation if all catalog servers are down
 
 ### 🤖 RL Training (Tinker + Atropos)
 
