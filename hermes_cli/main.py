@@ -602,6 +602,21 @@ def cmd_config(args):
     config_command(args)
 
 
+def cmd_serve(args):
+    """Start the web API server."""
+    try:
+        from hermes_api.server import start_server
+    except ImportError:
+        print("Error: Web dependencies not installed. Run: pip install -e '.[web]'")
+        sys.exit(1)
+    start_server(
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        cors_origins=args.cors_origins,
+    )
+
+
 def cmd_version(args):
     """Show version."""
     print(f"Hermes Agent v{__version__}")
@@ -1312,6 +1327,32 @@ For more help on a command:
         db.close()
 
     sessions_parser.set_defaults(func=cmd_sessions)
+
+    # =========================================================================
+    # serve command — web API server
+    # =========================================================================
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Start the web API server for the React dashboard",
+        description="Start the FastAPI server that powers the Hermes web UI"
+    )
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Host to bind to (default: 127.0.0.1)"
+    )
+    serve_parser.add_argument(
+        "--port", type=int, default=8642,
+        help="Port to listen on (default: 8642)"
+    )
+    serve_parser.add_argument(
+        "--reload", action="store_true",
+        help="Enable auto-reload for development"
+    )
+    serve_parser.add_argument(
+        "--cors-origins", default=None,
+        help="Comma-separated additional CORS origins"
+    )
+    serve_parser.set_defaults(func=cmd_serve)
 
     # =========================================================================
     # version command
