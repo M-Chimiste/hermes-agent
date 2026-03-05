@@ -94,6 +94,8 @@ def _discover_tools():
         "tools.process_registry",
         "tools.send_message_tool",
         "tools.model_catalog_tool",
+        "tools.honcho_tools",
+        "tools.homeassistant_tool",
     ]
     import importlib
     for mod_name in _modules:
@@ -104,6 +106,13 @@ def _discover_tools():
 
 
 _discover_tools()
+
+# MCP tool discovery (external MCP servers from config)
+try:
+    from tools.mcp_tool import discover_mcp_tools
+    discover_mcp_tools()
+except Exception as e:
+    logger.debug("MCP tool discovery failed: %s", e)
 
 
 # =============================================================================

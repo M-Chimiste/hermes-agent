@@ -13,10 +13,13 @@ This module provides:
 """
 
 import os
+import platform
 import sys
 import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+
+_IS_WINDOWS = platform.system() == "Windows"
 
 import yaml
 
@@ -68,6 +71,11 @@ DEFAULT_CONFIG = {
         "docker_image": "nikolaik/python-nodejs:python3.11-nodejs20",
         "singularity_image": "docker://nikolaik/python-nodejs:python3.11-nodejs20",
         "modal_image": "nikolaik/python-nodejs:python3.11-nodejs20",
+        # Container resource limits (docker, singularity, modal — ignored for local/ssh)
+        "container_cpu": 1,
+        "container_memory": 5120,       # MB (default 5GB)
+        "container_disk": 51200,        # MB (default 50GB)
+        "container_persistent": True,   # Persist filesystem across sessions
     },
     
     "browser": {
@@ -127,11 +135,16 @@ DEFAULT_CONFIG = {
     # Never saved to sessions, logs, or trajectories.
     "prefill_messages_file": "",
     
+    # Honcho AI-native memory -- reads ~/.honcho/config.json as single source of truth.
+    # This section is only needed for hermes-specific overrides; everything else
+    # (apiKey, workspace, peerName, sessions, enabled) comes from the global config.
+    "honcho": {},
+
     # Permanently allowed dangerous command patterns (added via "always" approval)
     "command_allowlist": [],
     
     # Config schema version - bump this when adding new required fields
-    "_config_version": 3,
+    "_config_version": 5,
 }
 
 # =============================================================================
@@ -229,6 +242,16 @@ OPTIONAL_ENV_VARS = {
         "category": "tool",
     },
 
+    # ── Honcho ──
+    "HONCHO_API_KEY": {
+        "description": "Honcho API key for AI-native persistent memory",
+        "prompt": "Honcho API key",
+        "url": "https://app.honcho.dev",
+        "tools": ["query_user_context"],
+        "password": True,
+        "category": "tool",
+    },
+
     # ── Messaging platforms ──
     "TELEGRAM_BOT_TOKEN": {
         "description": "Telegram bot token from @BotFather",
@@ -303,16 +326,19 @@ OPTIONAL_ENV_VARS = {
         "password": False,
         "category": "setting",
     },
+    # HERMES_TOOL_PROGRESS and HERMES_TOOL_PROGRESS_MODE are deprecated —
+    # now configured via display.tool_progress in config.yaml (off|new|all|verbose).
+    # Gateway falls back to these env vars for backward compatibility.
     "HERMES_TOOL_PROGRESS": {
-        "description": "Send tool progress messages in messaging channels (true/false)",
-        "prompt": "Enable tool progress messages",
+        "description": "(deprecated) Use display.tool_progress in config.yaml instead",
+        "prompt": "Tool progress (deprecated — use config.yaml)",
         "url": None,
         "password": False,
         "category": "setting",
     },
     "HERMES_TOOL_PROGRESS_MODE": {
-        "description": "Progress mode: 'all' (every tool) or 'new' (only when tool changes)",
-        "prompt": "Progress mode (all/new)",
+        "description": "(deprecated) Use display.tool_progress in config.yaml instead",
+        "prompt": "Progress mode (deprecated — use config.yaml)",
         "url": None,
         "password": False,
         "category": "setting",
@@ -426,6 +452,29 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
     
     # Check config version
     current_ver, latest_ver = check_config_version()
+    
+    # ── Version 3 → 4: migrate tool progress from .env to config.yaml ──
+    if current_ver < 4:
+        config = load_config()
+        display = config.get("display", {})
+        if not isinstance(display, dict):
+            display = {}
+        if "tool_progress" not in display:
+            old_enabled = get_env_value("HERMES_TOOL_PROGRESS")
+            old_mode = get_env_value("HERMES_TOOL_PROGRESS_MODE")
+            if old_enabled and old_enabled.lower() in ("false", "0", "no"):
+                display["tool_progress"] = "off"
+                results["config_added"].append("display.tool_progress=off (from HERMES_TOOL_PROGRESS=false)")
+            elif old_mode and old_mode.lower() in ("new", "all"):
+                display["tool_progress"] = old_mode.lower()
+                results["config_added"].append(f"display.tool_progress={old_mode.lower()} (from HERMES_TOOL_PROGRESS_MODE)")
+            else:
+                display["tool_progress"] = "all"
+                results["config_added"].append("display.tool_progress=all (default)")
+            config["display"] = display
+            save_config(config)
+            if not quiet:
+                print(f"  ✓ Migrated tool progress to config.yaml: {display['tool_progress']}")
     
     if current_ver < latest_ver and not quiet:
         print(f"Config version: {current_ver} → {latest_ver}")
@@ -577,7 +626,10 @@ def load_env() -> Dict[str, str]:
     env_vars = {}
     
     if env_path.exists():
-        with open(env_path) as f:
+        # On Windows, open() defaults to the system locale (cp1252) which can
+        # fail on UTF-8 .env files. Use explicit UTF-8 only on Windows.
+        open_kw = {"encoding": "utf-8", "errors": "replace"} if _IS_WINDOWS else {}
+        with open(env_path, **open_kw) as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith('#') and '=' in line:
@@ -592,10 +644,14 @@ def save_env_value(key: str, value: str):
     ensure_hermes_home()
     env_path = get_env_path()
     
-    # Load existing
+    # On Windows, open() defaults to the system locale (cp1252) which can
+    # cause OSError errno 22 on UTF-8 .env files.
+    read_kw = {"encoding": "utf-8", "errors": "replace"} if _IS_WINDOWS else {}
+    write_kw = {"encoding": "utf-8"} if _IS_WINDOWS else {}
+
     lines = []
     if env_path.exists():
-        with open(env_path) as f:
+        with open(env_path, **read_kw) as f:
             lines = f.readlines()
     
     # Find and update or append
@@ -612,7 +668,7 @@ def save_env_value(key: str, value: str):
             lines[-1] += "\n"
         lines.append(f"{key}={value}\n")
     
-    with open(env_path, 'w') as f:
+    with open(env_path, 'w', **write_kw) as f:
         f.writelines(lines)
 
 
@@ -769,7 +825,7 @@ def set_config_value(key: str, value: str):
         'FAL_KEY', 'TELEGRAM_BOT_TOKEN', 'DISCORD_BOT_TOKEN',
         'TERMINAL_SSH_HOST', 'TERMINAL_SSH_USER', 'TERMINAL_SSH_KEY',
         'SUDO_PASSWORD', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN',
-        'GITHUB_TOKEN',
+        'GITHUB_TOKEN', 'HONCHO_API_KEY',
     ]
     
     if key.upper() in api_keys or key.upper().startswith('TERMINAL_SSH'):
